@@ -104,7 +104,7 @@ if ($Net472) {
         Backup-Once $props
         $anchor = '</Project>'
         $idx = $pt.LastIndexOf($anchor, [StringComparison]::Ordinal)
-        $add = "  <ItemGroup>`r`n    <!-- ORVR-Net472: ref assemblies for SDK-only machines -->`r`n    <PackageReference Include=`"Microsoft.NETFramework.ReferenceAssemblies`" Version=`"1.0.3`" PrivateAssets=`"all`" />`r`n    <!-- ORVR-Net472: binary .resx support when building net472 with a modern SDK -->`r`n    <PackageReference Include=`"System.Resources.Extensions`" Version=`"8.0.0`" />`r`n  </ItemGroup>`r`n"
+        $add = "  <ItemGroup>`r`n    <!-- ORVR-Net472: ref assemblies for SDK-only machines -->`r`n    <PackageReference Include=`"Microsoft.NETFramework.ReferenceAssemblies`" Version=`"1.0.3`" PrivateAssets=`"all`" />`r`n    <!-- ORVR-Net472: binary .resx support when building net472 with a modern SDK -->`r`n    <PackageReference Include=`"System.Resources.Extensions`" Version=`"8.0.0`" />`r`n  </ItemGroup>`r`n  <PropertyGroup>`r`n    <!-- ORVR-Net472: accompanies System.Resources.Extensions above; without it SDK builds fail with MSB3823 -->`r`n    <GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>`r`n  </PropertyGroup>`r`n"
         $pt = $pt.Insert($idx, $add)
         [IO.File]::WriteAllText($props, $pt)
         Write-Output 'patched: Directory.Build.props (net472 ref assemblies)'

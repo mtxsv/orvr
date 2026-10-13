@@ -10,6 +10,20 @@ VR modification for Open Rails. Two supported codebases:
 
 Upstream sources are **not** vendored here.
 
+## HELPER.bat (easiest — double-click installer)
+
+`HELPER.bat` in this repo does everything by itself with a menu:
+
+1. Full install — 2. Custom install — 3. Repair — 4. Credits — 5. Settings — 6. Quit
+
+It installs missing tools (git, .NET 8 SDK via winget), downloads Open Rails
+(`OR_NewYear_MG_NoWD` — you do **not** need your own install), applies the VR
+patch, builds it, and puts the finished game in a tidy
+`Desktop\OpenRailsVR` folder (with `Menu.exe`, `ORVR-README.txt`, Content and
+shaders included). Repair rebuilds without touching your settings; Settings
+flips VR on/off and tunes it with no rebuild. Tested end-to-end on Win11
+(prereqs, clone, patch, Release build incl. Menu, deploy, quit paths).
+
 ## INSTALL (players — no build needed)
 
 1. Close the game completely (locked files cannot be replaced).
