@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>Orts.VR</AssemblyName>
+    <RootNamespace>Orts.VR</RootNamespace>
+    <Description>Open Rails VR mod: OpenXR stereo rendering, camera rig, controller interaction. Zero external dependencies.</Description>
+    <Company>Open Rails VR</Company>
+    <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
+  </PropertyGroup>
+
+</Project>
