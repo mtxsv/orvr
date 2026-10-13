@@ -66,9 +66,13 @@ $csproj = Join-Path $runActivity 'RunActivity.csproj'
 $projText = [IO.File]::ReadAllText($csproj)
 if (-not $projText.Contains('Orts.VR.csproj')) {
     Backup-Once $csproj
+    # NOTE: insert before the FINAL </Project> only (LastIndexOf). A blanket
+    # Replace would also hit <Project>{guid}</Project> metadata. (ORVR lesson.)
     $rel = Get-RelativePath $runActivity (Join-Path $OrvrRepo 'Source\Orts.VR\Orts.VR.csproj')
-    $ref = "  <ItemGroup>`r`n    <ProjectReference Include=`"$rel`" />`r`n  </ItemGroup>`r`n</Project>"
-    $projText = $projText.Replace('</Project>', $ref)
+    $ref = "  <ItemGroup>`r`n    <ProjectReference Include=`"$rel`" />`r`n  </ItemGroup>`r`n"
+    $closeIdx = $projText.LastIndexOf('</Project>', [StringComparison]::Ordinal)
+    if ($closeIdx -lt 0) { throw "no </Project> in $csproj" }
+    $projText = $projText.Insert($closeIdx, $ref)
     [IO.File]::WriteAllText($csproj, $projText)
     Write-Output "patched: RunActivity.csproj (ProjectReference -> $rel)"
 } else { Write-Output 'skip: RunActivity.csproj already references Orts.VR' }
@@ -94,13 +98,16 @@ Insert-AfterAnchorOnce $inputSettings 'UserCommand.VRRecenter' `
 $userInput = Join-Path $runActivity 'Viewer3D\UserInput.cs'
 $vrRegion = [IO.File]::ReadAllText((Join-Path $OrvrRepo 'Integration\RunActivity\VR\UserInput.VR.inc.cs'))
 Insert-AfterAnchorOnce $userInput 'VRPointerActive' '        public static int MouseWheelChange { get { return MouseState.ScrollWheelValue - LastMouseState.ScrollWheelValue; } }' ("`r`n`r`n" + $vrRegion.TrimEnd() + "`r`n")
-Replace-Once $userInput 'ORVR-MouseMoveX' 'return MouseState.X - LastMouseState.X;' 'return VRPointerActive ? VRPointerX - VRPointerLastX : MouseState.X - LastMouseState.X; // ORVR-MouseMoveX'
-Replace-Once $userInput 'ORVR-MouseMoveY' 'return MouseState.Y - LastMouseState.Y;' 'return VRPointerActive ? VRPointerY - VRPointerLastY : MouseState.Y - LastMouseState.Y; // ORVR-MouseMoveY'
+# NOTE: full-line replacements; trailing // markers sit AFTER the closing
+# braces so they cannot swallow code. A marker before a brace would break
+# the build (a // comment hides the rest of the line).
+Replace-Once $userInput 'ORVR-MouseMoveX' 'public static int MouseMoveX { get { return MouseState.X - LastMouseState.X; } }' 'public static int MouseMoveX { get { return VRPointerActive ? VRPointerX - VRPointerLastX : MouseState.X - LastMouseState.X; } } // ORVR-MouseMoveX'
+Replace-Once $userInput 'ORVR-MouseMoveY' 'public static int MouseMoveY { get { return MouseState.Y - LastMouseState.Y; } }' 'public static int MouseMoveY { get { return VRPointerActive ? VRPointerY - VRPointerLastY : MouseState.Y - LastMouseState.Y; } } // ORVR-MouseMoveY'
 Replace-Once $userInput 'ORVR-MouseX' 'public static int MouseX { get { return MouseState.X; } }' 'public static int MouseX { get { return VRPointerActive ? VRPointerX : MouseState.X; } } // ORVR-MouseX'
 Replace-Once $userInput 'ORVR-MouseY' 'public static int MouseY { get { return MouseState.Y; } }' 'public static int MouseY { get { return VRPointerActive ? VRPointerY : MouseState.Y; } } // ORVR-MouseY'
-Replace-Once $userInput 'ORVR-LeftDown' 'public static bool IsMouseLeftButtonDown { get { return MouseButtonsSwapped' 'public static bool IsMouseLeftButtonDown { get { return VRPointerActive ? VRPointerDown : MouseButtonsSwapped // ORVR-LeftDown'
-Replace-Once $userInput 'ORVR-LeftPressed' 'public static bool IsMouseLeftButtonPressed { get { return MouseButtonsSwapped' 'public static bool IsMouseLeftButtonPressed { get { return VRPointerActive ? VRPointerPressed : MouseButtonsSwapped // ORVR-LeftPressed'
-Replace-Once $userInput 'ORVR-LeftReleased' 'public static bool IsMouseLeftButtonReleased { get { return MouseButtonsSwapped' 'public static bool IsMouseLeftButtonReleased { get { return VRPointerActive ? VRPointerReleased : MouseButtonsSwapped // ORVR-LeftReleased'
+Replace-Once $userInput 'ORVR-LeftDown' 'public static bool IsMouseLeftButtonDown { get { return MouseButtonsSwapped ? MouseState.RightButton == ButtonState.Pressed : MouseState.LeftButton == ButtonState.Pressed; } }' 'public static bool IsMouseLeftButtonDown { get { return VRPointerActive ? VRPointerDown : (MouseButtonsSwapped ? MouseState.RightButton == ButtonState.Pressed : MouseState.LeftButton == ButtonState.Pressed); } } // ORVR-LeftDown'
+Replace-Once $userInput 'ORVR-LeftPressed' 'public static bool IsMouseLeftButtonPressed { get { return MouseButtonsSwapped ? MouseState.RightButton == ButtonState.Pressed && LastMouseState.RightButton == ButtonState.Released : MouseState.LeftButton == ButtonState.Pressed && LastMouseState.LeftButton == ButtonState.Released; } }' 'public static bool IsMouseLeftButtonPressed { get { return VRPointerActive ? VRPointerPressed : (MouseButtonsSwapped ? MouseState.RightButton == ButtonState.Pressed && LastMouseState.RightButton == ButtonState.Released : MouseState.LeftButton == ButtonState.Pressed && LastMouseState.LeftButton == ButtonState.Released); } } // ORVR-LeftPressed'
+Replace-Once $userInput 'ORVR-LeftReleased' 'public static bool IsMouseLeftButtonReleased { get { return MouseButtonsSwapped ? MouseState.RightButton == ButtonState.Released && LastMouseState.RightButton == ButtonState.Pressed : MouseState.LeftButton == ButtonState.Released && LastMouseState.LeftButton == ButtonState.Pressed; } }' 'public static bool IsMouseLeftButtonReleased { get { return VRPointerActive ? VRPointerReleased : (MouseButtonsSwapped ? MouseState.RightButton == ButtonState.Released && LastMouseState.RightButton == ButtonState.Pressed : MouseState.LeftButton == ButtonState.Released && LastMouseState.LeftButton == ButtonState.Pressed); } } // ORVR-LeftReleased'
 
 # --- 6. RenderFrame ---------------------------------------------------------------
 $renderFrame = Join-Path $runActivity 'Viewer3D\RenderFrame.cs'
@@ -111,8 +118,56 @@ function Get-MarkedBlock([string]$text, [string]$begin, [string]$end) {
     if ($i -lt 0 -or $j -lt 0 -or $j -le $i) { throw "block markers missing: $begin / $end" }
     return $text.Substring($i + $begin.Length, $j - ($i + $begin.Length))
 }
-function Replace-Method([string]$text, [string]$signature, [string]$replacement) {
+function Find-MethodSpan([string]$text, [string]$signature) {
     $i = $text.IndexOf($signature, [StringComparison]::Ordinal)
+    if ($i -lt 0) { throw "method not found: $signature" }
+    $brace = $text.IndexOf('{', $i)
+    $depth = 0
+    $j = $brace
+    while ($j -lt $text.Length) {
+        if ($text[$j] -eq '{') { $depth++ }
+        elseif ($text[$j] -eq '}') { $depth--; if ($depth -eq 0) { break } }
+        $j++
+    }
+    if ($depth -ne 0) { throw "unbalanced braces for: $signature" }
+    return @{ Open = $brace; Close = $j }
+}
+
+function Insert-AfterMethodCloseOnce([string]$path, [string]$marker, [string]$signature, [string]$insert) {
+    $text = [IO.File]::ReadAllText($path)
+    if ($text.Contains($marker)) { Write-Output "skip (marker present): $path :: $marker"; return }
+    Backup-Once $path
+    $span = Find-MethodSpan $text $signature
+    $eol = $text.IndexOf("`n", $span.Close)
+    $text = $text.Insert($eol + 1, $insert)
+    [IO.File]::WriteAllText($path, $text)
+    Write-Output "patched: $path :: $marker"
+}
+
+function Insert-AfterMethodOpenOnce([string]$path, [string]$marker, [string]$signature, [string]$insert) {
+    $text = [IO.File]::ReadAllText($path)
+    if ($text.Contains($marker)) { Write-Output "skip (marker present): $path :: $marker"; return }
+    Backup-Once $path
+    $span = Find-MethodSpan $text $signature
+    $eol = $text.IndexOf("`n", $span.Open)
+    $text = $text.Insert($eol + 1, $insert)
+    [IO.File]::WriteAllText($path, $text)
+    Write-Output "patched: $path :: $marker"
+}
+
+function Insert-BeforeAnchorOnce([string]$path, [string]$marker, [string]$anchor, [string]$insert) {
+    $text = [IO.File]::ReadAllText($path)
+    if ($text.Contains($marker)) { Write-Output "skip (marker present): $path :: $marker"; return }
+    $idx = $text.IndexOf($anchor, [StringComparison]::Ordinal)
+    if ($idx -lt 0) { throw "anchor not found in $path : $anchor" }
+    Backup-Once $path
+    $lineStart = $text.LastIndexOf("`n", $idx) + 1
+    $text = $text.Insert($lineStart, $insert)
+    [IO.File]::WriteAllText($path, $text)
+    Write-Output "patched: $path :: $marker"
+}
+
+function Replace-Method([string]$text, [string]$signature, [string]$replacement) {    $i = $text.IndexOf($signature, [StringComparison]::Ordinal)
     if ($i -lt 0) { throw "method not found: $signature" }
     $brace = $text.IndexOf('{', $i)
     $depth = 0
@@ -126,37 +181,26 @@ function Replace-Method([string]$text, [string]$signature, [string]$replacement)
     return $text.Substring(0, $i) + $replacement.TrimEnd() + "`r`n" + $text.Substring($j + 1)
 }
 # 6a. insert eye methods after SetCamera
-$setCameraAnchor = @'
-        public void SetCamera(Camera camera)
-        {
-            Camera = camera;
-            XNACameraLocation = CameraLocation = Camera.Location;
-            XNACameraLocation.Z *= -1;
-            XNACameraView = Camera.XnaView;
-            XNACameraProjection = Camera.XnaProjection;
-        }
-'@
 $eyeMethods = Get-MarkedBlock $vrFrameInc '// ==== ORVR-EYE-METHODS-BEGIN ====' '// ==== ORVR-EYE-METHODS-END ===='
-Insert-AfterAnchorOnce $renderFrame 'ORVR-SetStereoView' $setCameraAnchor ("`r`n" + $eyeMethods.TrimEnd() + "`r`n")
+Insert-AfterMethodCloseOnce $renderFrame 'public void SetStereoView(' 'public void SetCamera(Camera camera)' ("`r`n" + $eyeMethods.TrimEnd() + "`r`n")
 # 6b. replace DrawSimple with DrawSimple + DrawSimpleTo
 $rfText = [IO.File]::ReadAllText($renderFrame)
-if (-not $rfText.Contains('ORVR-DrawSimpleTo')) {
+if (-not $rfText.Contains('void DrawSimpleTo(GraphicsDevice graphicsDevice, bool logging, RenderTarget2D surface, bool presentToBackbuffer)')) {
     Backup-Once $renderFrame
     $drawSimpleNew = Get-MarkedBlock $vrFrameInc '// ==== ORVR-DRAWSIMPLE-BEGIN ====' '// ==== ORVR-DRAWSIMPLE-END ===='
     $rfText = Replace-Method $rfText '        void DrawSimple(GraphicsDevice graphicsDevice, bool logging)' $drawSimpleNew
     [IO.File]::WriteAllText($renderFrame, $rfText)
     Write-Output 'patched: RenderFrame.cs :: ORVR-DrawSimpleTo'
 } else { Write-Output 'skip (marker present): RenderFrame.cs :: ORVR-DrawSimpleTo' }
-
 # --- 7. RenderProcess ------------------------------------------------------------
 $renderProcess = Join-Path $runActivity 'Viewer3D\Processes\RenderProcess.cs'
 Insert-AfterAnchorOnce $renderProcess 'ORVR-VRSystem-field' '        RenderFrame CurrentFrame;   // a frame contains a list of primitives to draw at a specified time' @'
+
         // ORVR-VRSystem-field: stereo VR owner (lazy; null until first Viewer frame).
         public Orts.Viewer3D.VR.VRSystem VRSystem;
         readonly object VRSystemLock = new object();
 '@
-Insert-AfterAnchorOnce $renderProcess 'ORVR-Draw-hook' '        internal void Draw()
-        {' @'
+Insert-AfterMethodOpenOnce $renderProcess 'ORVR-Draw-hook' 'internal void Draw()' @'
 
             // ORVR-Draw-hook: genuine two-pass stereo. Mono path below is untouched.
             EnsureVRSystem();
@@ -176,8 +220,7 @@ Insert-AfterAnchorOnce $renderProcess 'ORVR-Draw-hook' '        internal void Dr
                 return;
             }
 '@
-Insert-AfterAnchorOnce $renderProcess 'ORVR-EnsureVRSystem' '        static void SwapFrames(ref RenderFrame frame1, ref RenderFrame frame2)' @'
-
+Insert-BeforeAnchorOnce $renderProcess 'ORVR-EnsureVRSystem' '        static void SwapFrames(ref RenderFrame frame1, ref RenderFrame frame2)' @'
         // ORVR-EnsureVRSystem: creates the VR owner once a Viewer exists.
         void EnsureVRSystem()
         {
@@ -190,12 +233,9 @@ Insert-AfterAnchorOnce $renderProcess 'ORVR-EnsureVRSystem' '        static void
                 }
             }
         }
+
 '@
-Replace-Once $renderProcess 'ORVR-Stop-dispose' '        internal void Stop()
-        {
-            Game.WatchdogProcess.Unregister(WatchdogToken);' '        internal void Stop()
-        {
-            Game.WatchdogProcess.Unregister(WatchdogToken);
+Replace-Once $renderProcess 'ORVR-Stop-dispose' '            Game.WatchdogProcess.Unregister(WatchdogToken);' '            Game.WatchdogProcess.Unregister(WatchdogToken);
 
             // ORVR-Stop-dispose
             try { VRSystem?.Dispose(); } catch { }
