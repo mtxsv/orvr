@@ -60,10 +60,10 @@ namespace Orts.VR
             projection = Matrix4x4.Identity;
             if (nearPlane <= 0f || farPlane <= nearPlane)
                 return false;
-            var tanL = MathF.Tan(fovLeft);
-            var tanR = MathF.Tan(fovRight);
-            var tanU = MathF.Tan(fovUp);
-            var tanD = MathF.Tan(fovDown);
+            var tanL = (float)Math.Tan(fovLeft);
+            var tanR = (float)Math.Tan(fovRight);
+            var tanU = (float)Math.Tan(fovUp);
+            var tanD = (float)Math.Tan(fovDown);
             var width = tanR + tanL;
             var height = tanU + tanD;
             if (width <= 0f || height <= 0f)
@@ -95,11 +95,11 @@ namespace Orts.VR
             out Matrix4x4 projection)
         {
             projection = Matrix4x4.Identity;
-            if (fovYRadians <= 0f || fovYRadians >= MathF.PI || aspect <= 0f)
+            if (fovYRadians <= 0f || fovYRadians >= (float)Math.PI || aspect <= 0f)
                 return false;
             if (nearPlane <= 0f || farPlane <= nearPlane)
                 return false;
-            var h = 1f / MathF.Tan(fovYRadians * 0.5f);
+            var h = 1f / (float)Math.Tan(fovYRadians * 0.5f);
             var w = h / aspect;
             projection = new Matrix4x4(
                 w, 0f, 0f, 0f,

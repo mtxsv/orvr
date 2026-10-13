@@ -123,8 +123,8 @@ namespace Orts.VR
 
         public Vector3 ClampPosition(Vector3 p)
         {
-            p.Y = MathF.Min(MaxUpM, MathF.Max(-MaxDownM, p.Y));
-            var r = MathF.Sqrt(p.X * p.X + p.Z * p.Z);
+            p.Y = Math.Min(MaxUpM, Math.Max(-MaxDownM, p.Y));
+            var r = (float)Math.Sqrt(p.X * p.X + p.Z * p.Z);
             if (r > MaxRadiusM && r > 0f)
             {
                 var s = MaxRadiusM / r;
