@@ -1,0 +1,9 @@
+build/
+Program/
+*.user
+*.suo
+.vs/
+bin/
+obj/
+TestResults/
+*.trx
