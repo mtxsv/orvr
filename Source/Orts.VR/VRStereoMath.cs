@@ -36,15 +36,21 @@ namespace Orts.VR
     {
         /// <summary>
         /// Builds a per-eye view matrix from the base (mono) camera view.
-        /// headInverse is the inverse of the tracked head pose expressed in
-        /// camera space; eyeOffsetX is -IPD/2 (left) or +IPD/2 (right) in meters.
+        /// headInverse maps base-camera space to tracked-head space (see
+        /// VRHeadPose.HeadInverse); eyeOffsetX is -IPD/2 (left) or +IPD/2
+        /// (right) in meters along head-space +X (camera-right in view
+        /// space: XNA view space is +X right, +Y up, +Z forward).
+        ///
+        /// Row-vector order (System.Numerics / XNA): world -> base view ->
+        /// head -> eye, i.e. V_eye = V_base * H^-1 * T(-eyeOffsetX).
+        /// Both eyes share the same base view and head sample, so they can
+        /// never desynchronize from the simulation state.
         /// </summary>
         public static Matrix4x4 EyeView(in Matrix4x4 baseView, in Matrix4x4 headInverse, float eyeOffsetX)
         {
-            var eyeShift = Matrix4x4.CreateTranslation(eyeOffsetX, 0f, 0f);
-            // Head motion first (camera-relative), then lateral eye shift.
-            var m = Matrix4x4.Multiply(headInverse, eyeShift);
-            return Matrix4x4.Multiply(m, baseView);
+            var headToEye = Matrix4x4.CreateTranslation(-eyeOffsetX, 0f, 0f);
+            var baseToEye = Matrix4x4.Multiply(headInverse, headToEye);
+            return Matrix4x4.Multiply(baseView, baseToEye);
         }
 
         /// <summary>

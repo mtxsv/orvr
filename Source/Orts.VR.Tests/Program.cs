@@ -75,11 +75,71 @@ namespace Orts.VR.Tests
                 var rig = new VRCameraRig { IpdMeters = 0.064f };
                 var baseView = Matrix4x4.Identity;
                 rig.ComputeEyeViews(baseView, out var l, out var r);
-                // Same head sample -> translation differs only in X by IPD.
-                var dx = r.View.Translation.X - l.View.Translation.X;
-                Assert.Equal(0.064f, dx, 1e-5f, "ipd separation");
+                // V_eye = V * H^-1 * T(-eyeOffset): with identity base/head,
+                // left eye (offset -IPD/2) shifts the world +IPD/2 in X.
+                Assert.Equal(0.032f, l.View.Translation.X, 1e-5f, "left shift");
+                Assert.Equal(-0.032f, r.View.Translation.X, 1e-5f, "right shift");
+                var sep = l.View.Translation.X - r.View.Translation.X;
+                Assert.Equal(0.064f, sep, 1e-5f, "ipd separation");
                 Assert.Equal(l.View.Translation.Y, r.View.Translation.Y, 1e-6f, "same Y");
                 Assert.Equal(l.View.Translation.Z, r.View.Translation.Z, 1e-6f, "same Z");
+            });
+
+            Test("Eye separation stays IPD under rotated base", () =>
+            {
+                var rig = new VRCameraRig { IpdMeters = 0.064f };
+                var b = Matrix4x4.CreateLookAt(new Vector3(10, 3, -5), new Vector3(10, 3, 50), Vector3.UnitY);
+                rig.ComputeEyeViews(b, out var l, out var r);
+                var pl = Vector3.Transform(Vector3.Zero, l.View);
+                var pr = Vector3.Transform(Vector3.Zero, r.View);
+                Assert.Equal(0.064f, (pl - pr).Length(), 1e-4f, "parallax == IPD");
+            });
+
+            Test("Head moving right shifts world left", () =>
+            {
+                var rig = new VRCameraRig { IpdMeters = 0.0f };
+                rig.UpdateHead(new VRRawPose(new Vector3(0.1f, 0f, 0f), Quaternion.Identity));
+                rig.ComputeEyeViews(Matrix4x4.Identity, out var l, out _);
+                var p = Vector3.Transform(Vector3.Zero, l.View);
+                Assert.Equal(-0.1f, p.X, 1e-5f, "world shifts opposite head");
+            });
+
+            Test("OpenXR-to-rig convention invariants", () =>
+            {
+                // Identity stays identity.
+                var id = VRConventions.OpenXRToRig(Vector3.Zero, Quaternion.Identity);
+                Assert.Equal(0f, id.Position.Length(), 1e-6f, "id pos");
+                // OpenXR forward (0,0,-1) must become rig forward (0,0,+1).
+                var fwd = VRConventions.OpenXRToRig(Vector3.Zero, Quaternion.Identity);
+                var h = new VRHeadPose();
+                h.Update(fwd);
+                var f = h.HeadForward();
+                Assert.Equal(0f, f.X, 1e-5f, "fwd x");
+                Assert.Equal(0f, f.Y, 1e-5f, "fwd y");
+                Assert.Equal(1f, f.Z, 1e-5f, "fwd z");
+                // Position Z mirrors.
+                var p = VRConventions.OpenXRToRig(new Vector3(1, 2, 3), Quaternion.Identity);
+                Assert.Equal(1f, p.Position.X, 1e-6f, "px");
+                Assert.Equal(2f, p.Position.Y, 1e-6f, "py");
+                Assert.Equal(-3f, p.Position.Z, 1e-6f, "pz");
+                // Involution: converting twice is identity.
+                var q = Quaternion.Normalize(new Quaternion(0.1f, 0.2f, 0.3f, 0.9f));
+                var once = VRConventions.OpenXRToRig(new Vector3(0.5f, -0.2f, 0.7f), q);
+                var twice = VRConventions.OpenXRToRig(once.Position, once.Orientation);
+                Assert.Equal(0.5f, twice.Position.X, 1e-5f, "inv x");
+                Assert.Equal(-0.2f, twice.Position.Y, 1e-5f, "inv y");
+                Assert.Equal(0.7f, twice.Position.Z, 1e-5f, "inv z");
+                Assert.Equal(q.X, twice.Orientation.X, 1e-5f, "inv qx");
+                Assert.Equal(q.Y, twice.Orientation.Y, 1e-5f, "inv qy");
+                Assert.Equal(q.Z, twice.Orientation.Z, 1e-5f, "inv qz");
+                // OpenXR left turn (yaw +90 about Y, facing -X) stays facing -X in rig.
+                var yawLeft = Quaternion.CreateFromYawPitchRoll((float)Math.PI / 2f, 0f, 0f);
+                var mapped = VRConventions.OpenXRToRig(Vector3.Zero, yawLeft);
+                var h2 = new VRHeadPose();
+                h2.Update(mapped);
+                var f2 = h2.HeadForward();
+                Assert.Equal(-1f, f2.X, 1e-5f, "yaw-left faces -X");
+                Assert.Equal(0f, f2.Z, 1e-4f, "yaw-left z~0");
             });
 
             Test("EyeViews deterministic for same state", () =>
