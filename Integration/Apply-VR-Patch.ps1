@@ -104,7 +104,7 @@ if ($Net472) {
         Backup-Once $props
         $anchor = '</Project>'
         $idx = $pt.LastIndexOf($anchor, [StringComparison]::Ordinal)
-        $add = "  <ItemGroup>`r`n    <!-- ORVR-Net472: ref assemblies for SDK-only machines -->`r`n    <PackageReference Include=`"Microsoft.NETFramework.ReferenceAssemblies`" Version=`"1.0.3`" PrivateAssets=`"all`" />`r`n  </ItemGroup>`r`n"
+        $add = "  <ItemGroup>`r`n    <!-- ORVR-Net472: ref assemblies for SDK-only machines -->`r`n    <PackageReference Include=`"Microsoft.NETFramework.ReferenceAssemblies`" Version=`"1.0.3`" PrivateAssets=`"all`" />`r`n    <!-- ORVR-Net472: binary .resx support when building net472 with a modern SDK -->`r`n    <PackageReference Include=`"System.Resources.Extensions`" Version=`"8.0.0`" />`r`n  </ItemGroup>`r`n"
         $pt = $pt.Insert($idx, $add)
         [IO.File]::WriteAllText($props, $pt)
         Write-Output 'patched: Directory.Build.props (net472 ref assemblies)'
@@ -269,7 +269,7 @@ if (-not $rfText.Contains('void DrawSimpleTo(GraphicsDevice graphicsDevice,')) {
 } else { Write-Output 'skip (marker present): RenderFrame.cs :: DrawSimpleTo' }
 # --- 7. RenderProcess ------------------------------------------------------------
 $renderProcess = Join-Path $runActivity 'Viewer3D\Processes\RenderProcess.cs'
-Insert-AfterAnchorOnce $renderProcess 'ORVR-VRSystem-field' '        RenderFrame CurrentFrame;   // a frame contains a list of primitives to draw at a specified time' @'
+Insert-AfterAnchorOnce $renderProcess 'ORVR-VRSystem-field' 'RenderFrame CurrentFrame;   // a frame contains a list of primitives to draw at a specified time' @'
 
         // ORVR-VRSystem-field: stereo VR owner (lazy; null until first Viewer frame).
         public Orts.Viewer3D.VR.VRSystem VRSystem;
