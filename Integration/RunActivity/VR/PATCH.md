@@ -2,8 +2,26 @@
 
 All edits are additive and inert when `VREnabled` is false (default).
 `Apply-VR-Patch.ps1` performs them idempotently; this document is the
-human-readable source of truth. File paths are relative to the Open Rails
-checkout (`Source/...`), verified against `master` @ Oct 2026.
+human-readable source of truth. File paths are relative to the checkout
+(`Source/...`).
+
+Supported trees (same script, tree-agnostic anchors):
+
+- Upstream `openrails/openrails` master (`net6-windows`, MonoGame 3.8.1).
+- `Csantucci/openrails` branch `OR_NewYear_MG_NoWD` (`net472` by default,
+  MonoGame 3.8.0.1641) — pass `-Net472` so the script adds the
+  `Microsoft.NETFramework.ReferenceAssemblies` package (needed only on
+  SDK-only machines without the .NET Framework targeting pack).
+
+Tree differences the script handles automatically:
+
+- `UserInput` mouse getters: upstream has `MouseButtonsSwapped` logic, ORNYMG
+  does not. The script wraps the existing `return EXPR;` generically instead
+  of matching full lines.
+- `RenderFrame.DrawSimple`: upstream renders via `RenderSurface` (+blit) and
+  gets the parameterized replacement; ORNYMG draws straight to the current
+  target (plus `ExtendedPerformanceDump` timing), so its original body is
+  preserved verbatim and only wrapped with an eye-target bind.
 
 ## 0. New files (copied, no edits needed)
 
@@ -51,18 +69,15 @@ Commands[(int)UserCommand.VRRecenter] = new UserCommandKeyInput(0x13, KeyModifie
 ## 5. `Source/RunActivity/Viewer3D/UserInput.cs` — VR pointer overlay
 
 1. Insert `Integration/RunActivity/VR/UserInput.VR.inc.cs` region (e.g.
-   after the `MouseWheelChange` property, ~line 193).
+   after the `MouseWheelChange` property).
 2. Wrap exactly these getters so the virtual mouse supersedes the physical
-   mouse only while a controller aims at the screen:
+   mouse only while a controller aims at the screen (the script wraps the
+   existing `return EXPR;` as
+   `return VRPointerActive ? (VR-EXPR) : (EXPR);` — same result on both trees):
 
 ```csharp
-public static int MouseMoveX { get { return VRPointerActive ? VRPointerX - VRPointerLastX : MouseState.X - LastMouseState.X; } }
-public static int MouseMoveY { get { return VRPointerActive ? VRPointerY - VRPointerLastY : MouseState.Y - LastMouseState.Y; } }
-public static int MouseX { get { return VRPointerActive ? VRPointerX : MouseState.X; } }
-public static int MouseY { get { return VRPointerActive ? VRPointerY : MouseState.Y; } }
-public static bool IsMouseLeftButtonDown { get { return VRPointerActive ? VRPointerDown : <original>; } }
-public static bool IsMouseLeftButtonPressed { get { return VRPointerActive ? VRPointerPressed : <original>; } }
-public static bool IsMouseLeftButtonReleased { get { return VRPointerActive ? VRPointerReleased : <original>; } }
+// MouseMoveX/Y use the VR-pointer delta, MouseX/Y the VR-pointer position,
+// IsMouseLeftButtonDown/Pressed/Released the VR trigger state.
 ```
 
 `<original>` = the existing right-hand side verbatim (incl. MouseButtonsSwapped

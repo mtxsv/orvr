@@ -12,7 +12,8 @@
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Checkout,
-    [Parameter(Mandatory = $true)][string]$OrvrRepo
+    [Parameter(Mandatory = $true)][string]$OrvrRepo,
+    [switch]$Net472
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,18 +34,48 @@ function Backup-Once([string]$path) {
 }
 
 function Insert-AfterAnchorOnce([string]$path, [string]$marker, [string]$anchor, [string]$insert) {
+    # Line-aware: inserts after the END OF THE LINE containing the anchor,
+    # so the same anchor works on trees with different line prefixes
+    # (e.g. "RenderFrame CurrentFrame;" vs "public RenderFrame CurrentFrame;").
     $text = [IO.File]::ReadAllText($path)
     if ($text.Contains($marker)) { Write-Output "skip (marker present): $path :: $marker"; return }
     $idx = $text.IndexOf($anchor, [StringComparison]::Ordinal)
     if ($idx -lt 0) { throw "anchor not found in $path : $anchor" }
     Backup-Once $path
-    $text = $text.Insert($idx + $anchor.Length, $insert)
+    $eol = $text.IndexOf("`n", $idx)
+    $text = $text.Insert($eol + 1, $insert)
     [IO.File]::WriteAllText($path, $text)
     Write-Output "patched: $path :: $marker"
 }
 
-function Replace-Once([string]$path, [string]$marker, [string]$old, [string]$new) {
+function Wrap-ReturnOnce([string]$path, [string]$marker, [string]$lineContains, [string]$vrExpr) {
+    # Tree-agnostic getter wrap: finds the full property line containing
+    # $lineContains (must look like "{ get { return EXPR; } }") and rewrites
+    # it as "{ get { return VRPointerActive ? (VREXPR) : (EXPR); } } // MARKER".
+    # Works with or without MouseButtonsSwapped logic (upstream vs ORNYMG).
     $text = [IO.File]::ReadAllText($path)
+    if ($text.Contains($marker)) { Write-Output "skip (marker present): $path :: $marker"; return }
+    $lines = $text -split "`r?`n"
+    $done = $false
+    for ($i = 0; $i -lt $lines.Length; $i++) {
+        if ($lines[$i].Contains($lineContains) -and $lines[$i].Contains('{ get { return ') -and $lines[$i].TrimEnd().EndsWith('; } }')) {
+            $line = $lines[$i]
+            $ri = $line.IndexOf('{ get { return ')
+            $prefix = $line.Substring(0, $ri + '{ get { return '.Length)
+            $expr = $line.Substring($ri + '{ get { return '.Length)
+            $expr = $expr.Substring(0, $expr.Length - '; } }'.Length)
+            $lines[$i] = $prefix + 'VRPointerActive ? (' + $vrExpr + ') : (' + $expr + '); } } // ' + $marker
+            $done = $true
+            break
+        }
+    }
+    if (-not $done) { throw "getter not found in $path : $lineContains" }
+    Backup-Once $path
+    [IO.File]::WriteAllText($path, ($lines -join "`r`n"))
+    Write-Output "patched: $path :: $marker"
+}
+
+function Replace-Once([string]$path, [string]$marker, [string]$old, [string]$new) {    $text = [IO.File]::ReadAllText($path)
     if ($text.Contains($marker)) { Write-Output "skip (marker present): $path :: $marker"; return }
     if (-not $text.Contains($old)) { throw "pattern not found in $path : $($old.Substring(0, [Math]::Min(80, $old.Length)))..." }
     Backup-Once $path
@@ -60,6 +91,25 @@ if (-not (Test-Path -LiteralPath $vrDir)) { New-Item -ItemType Directory -Path $
 Copy-Item -LiteralPath (Join-Path $OrvrRepo 'Integration\RunActivity\VR\VRSystem.cs') -Destination (Join-Path $vrDir 'VRSystem.cs') -Force
 Copy-Item -LiteralPath (Join-Path $OrvrRepo 'Integration\RunActivity\VR\VRNative.cs') -Destination (Join-Path $vrDir 'VRNative.cs') -Force
 Write-Output 'copied VRSystem.cs + VRNative.cs'
+
+# --- 0b. .NET Framework reference assemblies (only with -Net472) -----------------
+# SDK-style net472 builds on machines without VS/.NET Framework targeting
+# packs (e.g. .NET 8 SDK only) need the reference-assemblies package. This
+# touches only the disposable checkout, never the game folder.
+if ($Net472) {
+    $props = Join-Path $Checkout 'Source\Directory.Build.props'
+    if (-not (Test-Path -LiteralPath $props)) { throw "Directory.Build.props not found: $props" }
+    $pt = [IO.File]::ReadAllText($props)
+    if (-not $pt.Contains('Microsoft.NETFramework.ReferenceAssemblies')) {
+        Backup-Once $props
+        $anchor = '</Project>'
+        $idx = $pt.LastIndexOf($anchor, [StringComparison]::Ordinal)
+        $add = "  <ItemGroup>`r`n    <!-- ORVR-Net472: ref assemblies for SDK-only machines -->`r`n    <PackageReference Include=`"Microsoft.NETFramework.ReferenceAssemblies`" Version=`"1.0.3`" PrivateAssets=`"all`" />`r`n  </ItemGroup>`r`n"
+        $pt = $pt.Insert($idx, $add)
+        [IO.File]::WriteAllText($props, $pt)
+        Write-Output 'patched: Directory.Build.props (net472 ref assemblies)'
+    } else { Write-Output 'skip: Directory.Build.props already has ref assemblies' }
+}
 
 # --- 1. ProjectReference ------------------------------------------------------
 $csproj = Join-Path $runActivity 'RunActivity.csproj'
@@ -98,16 +148,16 @@ Insert-AfterAnchorOnce $inputSettings 'UserCommand.VRRecenter' `
 $userInput = Join-Path $runActivity 'Viewer3D\UserInput.cs'
 $vrRegion = [IO.File]::ReadAllText((Join-Path $OrvrRepo 'Integration\RunActivity\VR\UserInput.VR.inc.cs'))
 Insert-AfterAnchorOnce $userInput 'VRPointerActive' '        public static int MouseWheelChange { get { return MouseState.ScrollWheelValue - LastMouseState.ScrollWheelValue; } }' ("`r`n`r`n" + $vrRegion.TrimEnd() + "`r`n")
-# NOTE: full-line replacements; trailing // markers sit AFTER the closing
-# braces so they cannot swallow code. A marker before a brace would break
-# the build (a // comment hides the rest of the line).
-Replace-Once $userInput 'ORVR-MouseMoveX' 'public static int MouseMoveX { get { return MouseState.X - LastMouseState.X; } }' 'public static int MouseMoveX { get { return VRPointerActive ? VRPointerX - VRPointerLastX : MouseState.X - LastMouseState.X; } } // ORVR-MouseMoveX'
-Replace-Once $userInput 'ORVR-MouseMoveY' 'public static int MouseMoveY { get { return MouseState.Y - LastMouseState.Y; } }' 'public static int MouseMoveY { get { return VRPointerActive ? VRPointerY - VRPointerLastY : MouseState.Y - LastMouseState.Y; } } // ORVR-MouseMoveY'
-Replace-Once $userInput 'ORVR-MouseX' 'public static int MouseX { get { return MouseState.X; } }' 'public static int MouseX { get { return VRPointerActive ? VRPointerX : MouseState.X; } } // ORVR-MouseX'
-Replace-Once $userInput 'ORVR-MouseY' 'public static int MouseY { get { return MouseState.Y; } }' 'public static int MouseY { get { return VRPointerActive ? VRPointerY : MouseState.Y; } } // ORVR-MouseY'
-Replace-Once $userInput 'ORVR-LeftDown' 'public static bool IsMouseLeftButtonDown { get { return MouseButtonsSwapped ? MouseState.RightButton == ButtonState.Pressed : MouseState.LeftButton == ButtonState.Pressed; } }' 'public static bool IsMouseLeftButtonDown { get { return VRPointerActive ? VRPointerDown : (MouseButtonsSwapped ? MouseState.RightButton == ButtonState.Pressed : MouseState.LeftButton == ButtonState.Pressed); } } // ORVR-LeftDown'
-Replace-Once $userInput 'ORVR-LeftPressed' 'public static bool IsMouseLeftButtonPressed { get { return MouseButtonsSwapped ? MouseState.RightButton == ButtonState.Pressed && LastMouseState.RightButton == ButtonState.Released : MouseState.LeftButton == ButtonState.Pressed && LastMouseState.LeftButton == ButtonState.Released; } }' 'public static bool IsMouseLeftButtonPressed { get { return VRPointerActive ? VRPointerPressed : (MouseButtonsSwapped ? MouseState.RightButton == ButtonState.Pressed && LastMouseState.RightButton == ButtonState.Released : MouseState.LeftButton == ButtonState.Pressed && LastMouseState.LeftButton == ButtonState.Released); } } // ORVR-LeftPressed'
-Replace-Once $userInput 'ORVR-LeftReleased' 'public static bool IsMouseLeftButtonReleased { get { return MouseButtonsSwapped ? MouseState.RightButton == ButtonState.Released && LastMouseState.RightButton == ButtonState.Pressed : MouseState.LeftButton == ButtonState.Released && LastMouseState.LeftButton == ButtonState.Pressed; } }' 'public static bool IsMouseLeftButtonReleased { get { return VRPointerActive ? VRPointerReleased : (MouseButtonsSwapped ? MouseState.RightButton == ButtonState.Released && LastMouseState.RightButton == ButtonState.Pressed : MouseState.LeftButton == ButtonState.Released && LastMouseState.LeftButton == ButtonState.Pressed); } } // ORVR-LeftReleased'
+# NOTE: tree-agnostic wraps (work on upstream master and ORNYMG, with or
+# without the MouseButtonsSwapped logic). Trailing // markers sit AFTER the
+# closing braces so they cannot swallow code.
+Wrap-ReturnOnce $userInput 'ORVR-MouseMoveX' 'public static int MouseMoveX' 'VRPointerX - VRPointerLastX'
+Wrap-ReturnOnce $userInput 'ORVR-MouseMoveY' 'public static int MouseMoveY' 'VRPointerY - VRPointerLastY'
+Wrap-ReturnOnce $userInput 'ORVR-MouseX' 'public static int MouseX' 'VRPointerX'
+Wrap-ReturnOnce $userInput 'ORVR-MouseY' 'public static int MouseY' 'VRPointerY'
+Wrap-ReturnOnce $userInput 'ORVR-LeftDown' 'public static bool IsMouseLeftButtonDown' 'VRPointerDown'
+Wrap-ReturnOnce $userInput 'ORVR-LeftPressed' 'public static bool IsMouseLeftButtonPressed' 'VRPointerPressed'
+Wrap-ReturnOnce $userInput 'ORVR-LeftReleased' 'public static bool IsMouseLeftButtonReleased' 'VRPointerReleased'
 
 # --- 6. RenderFrame ---------------------------------------------------------------
 $renderFrame = Join-Path $runActivity 'Viewer3D\RenderFrame.cs'
@@ -183,15 +233,40 @@ function Replace-Method([string]$text, [string]$signature, [string]$replacement)
 # 6a. insert eye methods after SetCamera
 $eyeMethods = Get-MarkedBlock $vrFrameInc '// ==== ORVR-EYE-METHODS-BEGIN ====' '// ==== ORVR-EYE-METHODS-END ===='
 Insert-AfterMethodCloseOnce $renderFrame 'public void SetStereoView(' 'public void SetCamera(Camera camera)' ("`r`n" + $eyeMethods.TrimEnd() + "`r`n")
-# 6b. replace DrawSimple with DrawSimple + DrawSimpleTo
+# 6b. DrawSimple -> DrawSimple + DrawSimpleTo.
+# Upstream master renders through RenderSurface/RenderSurfaceMaterial (needs
+# the parameterized replacement from the .inc file). ORNYMG draws straight to
+# the current target, so the original body is preserved verbatim and only
+# wrapped with an eye-target bind.
 $rfText = [IO.File]::ReadAllText($renderFrame)
-if (-not $rfText.Contains('void DrawSimpleTo(GraphicsDevice graphicsDevice, bool logging, RenderTarget2D surface, bool presentToBackbuffer)')) {
+if (-not $rfText.Contains('void DrawSimpleTo(GraphicsDevice graphicsDevice,')) {
     Backup-Once $renderFrame
-    $drawSimpleNew = Get-MarkedBlock $vrFrameInc '// ==== ORVR-DRAWSIMPLE-BEGIN ====' '// ==== ORVR-DRAWSIMPLE-END ===='
-    $rfText = Replace-Method $rfText '        void DrawSimple(GraphicsDevice graphicsDevice, bool logging)' $drawSimpleNew
+    $span = Find-MethodSpan $rfText 'void DrawSimple(GraphicsDevice graphicsDevice, bool logging)'
+    $bodyStart = $rfText.IndexOf('{', $span.Open) + 1
+    $origBody = $rfText.Substring($bodyStart, $span.Close - $bodyStart).Trim("`r", "`n")
+    if ($origBody.Contains('RenderSurfaceMaterial')) {
+        $drawSimpleNew = Get-MarkedBlock $vrFrameInc '// ==== ORVR-DRAWSIMPLE-BEGIN ====' '// ==== ORVR-DRAWSIMPLE-END ===='
+        $rfText = Replace-Method $rfText 'void DrawSimple(GraphicsDevice graphicsDevice, bool logging)' $drawSimpleNew
+    } else {
+        $wrapped = "        void DrawSimple(GraphicsDevice graphicsDevice, bool logging)`r`n" +
+            "        {`r`n" +
+            "            DrawSimpleTo(graphicsDevice, logging, null, true);`r`n" +
+            "        }`r`n`r`n" +
+            "        /// <summary>`r`n" +
+            "        /// ORVR: eye-target wrapper. Mono path binds no target (original`r`n" +
+            "        /// behavior); VR binds one eye target and reuses the same body.`r`n" +
+            "        /// </summary>`r`n" +
+            "        void DrawSimpleTo(GraphicsDevice graphicsDevice, bool logging, RenderTarget2D eyeTarget, bool presentToBackbuffer)`r`n" +
+            "        {`r`n" +
+            "            if (eyeTarget != null)`r`n" +
+            "                graphicsDevice.SetRenderTarget(eyeTarget);`r`n" +
+            $origBody + "`r`n" +
+            "        }`r`n"
+        $rfText = Replace-Method $rfText 'void DrawSimple(GraphicsDevice graphicsDevice, bool logging)' $wrapped
+    }
     [IO.File]::WriteAllText($renderFrame, $rfText)
-    Write-Output 'patched: RenderFrame.cs :: ORVR-DrawSimpleTo'
-} else { Write-Output 'skip (marker present): RenderFrame.cs :: ORVR-DrawSimpleTo' }
+    Write-Output 'patched: RenderFrame.cs :: DrawSimpleTo'
+} else { Write-Output 'skip (marker present): RenderFrame.cs :: DrawSimpleTo' }
 # --- 7. RenderProcess ------------------------------------------------------------
 $renderProcess = Join-Path $runActivity 'Viewer3D\Processes\RenderProcess.cs'
 Insert-AfterAnchorOnce $renderProcess 'ORVR-VRSystem-field' '        RenderFrame CurrentFrame;   // a frame contains a list of primitives to draw at a specified time' @'
