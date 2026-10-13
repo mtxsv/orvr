@@ -83,11 +83,12 @@ namespace Orts.VR
         }
 
         /// <summary>
-        /// Creates the OpenXR instance for the D3D11 device LUID. luidLow/High
-        /// come from the DXGI adapter Open Rails renders on (see integration
-        /// doc). Returns false with Status/Error set on any failure.
+        /// Creates the OpenXR instance + D3D11 session against the engine's
+        /// own ID3D11Device (XR_KHR_D3D11_ENABLE graphics binding). Pass the
+        /// native device pointer (e.g. MonoGame GraphicsDevice.Handle).
+        /// Returns false with Status/Error set on any failure.
         /// </summary>
-        public bool Initialize(uint luidLow, int luidHigh)
+        public bool Initialize(IntPtr d3d11Device)
         {
             if (_disposed)
             {
@@ -99,11 +100,16 @@ namespace Orts.VR
                 Status = VROpenXRStatus.RuntimeMissing;
                 return false;
             }
+            if (d3d11Device == IntPtr.Zero)
+            {
+                Fail("Null D3D11 device; cannot create session.");
+                return false;
+            }
             Status = VROpenXRStatus.Initializing;
             try
             {
                 var appName = "OpenRails-VR";
-                var rc = NativeMethods.xrCreateInstanceForD3D11(appName, luidLow, luidHigh,
+                var rc = NativeMethods.xrCreateInstanceForD3D11(appName, d3d11Device,
                     out _instance, out _systemId, out var runtimePtr, out var w, out var h);
                 if (rc != 0 || _instance == 0)
                 {
@@ -115,7 +121,7 @@ namespace Orts.VR
                 RecommendedWidth = w;
                 RecommendedHeight = h;
 
-                rc = NativeMethods.xrCreateD3D11Session(_instance, _systemId, luidLow, luidHigh, out _session);
+                rc = NativeMethods.xrCreateD3D11Session(_instance, _systemId, d3d11Device, out _session);
                 if (rc != 0 || _session == 0)
                 {
                     Fail($"D3D11 session creation failed (rc={rc}).");
@@ -216,12 +222,104 @@ namespace Orts.VR
             }
         }
 
+        /// <summary>
+        /// Polls controller action states (aim poses, trigger/squeeze edges,
+        /// thumbstick, buttons) for both hands. Poses are in OpenXR space;
+        /// convert with VRConventions.OpenXRToRig before feeding the rig.
+        /// Returns false in fallback mode or on error (hands stay inactive).
+        /// </summary>
+        public bool PollActions(out VRHandState left, out VRHandState right)
+        {
+            left = default;
+            right = default;
+            if (!TrackingAvailable)
+                return false;
+            try
+            {
+                var rc = NativeMethods.xrPollActions(_session, out var both);
+                if (rc != 0)
+                    return false;
+                left = ToHandState(both.Left);
+                right = ToHandState(both.Right);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static VRHandState ToHandState(NativeMethods.HandActionState s)
+        {
+            return new VRHandState
+            {
+                Active = s.Active != 0,
+                AimPosition = s.AimPosition,
+                AimOrientation = s.AimOrientation,
+                Trigger = s.Trigger,
+                TriggerPressed = s.TriggerPressed != 0,
+                TriggerReleased = s.TriggerReleased != 0,
+                SqueezePressed = s.SqueezePressed != 0,
+                Thumbstick = s.Thumbstick,
+                Buttons = s.Buttons,
+            };
+        }
+
         /// <summary>Recenters the runtime reference space (also recenters rig).</summary>
         public void Recenter()
         {
             if (!TrackingAvailable)
                 return;
             try { NativeMethods.xrRecenter(_session); } catch { /* stay in current space */ }
+        }
+
+        /// <summary>
+        /// Submits two GPU-shared eye textures (DXGI shared handles from the
+        /// engine's eye render targets) to the active session. The shim opens
+        /// them on the session device, copies into the swapchain images and
+        /// ends the frame. Returns false when unavailable (caller composites
+        /// the desktop mirror instead). Never throws.
+        /// </summary>
+        public bool SubmitSharedHandles(IntPtr sharedLeft, IntPtr sharedRight, int width, int height)
+        {
+            if (!TrackingAvailable || sharedLeft == IntPtr.Zero || sharedRight == IntPtr.Zero)
+                return false;
+            try
+            {
+                return NativeMethods.xrSubmitShared(_session, sharedLeft, sharedRight, width, height) == 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>Runtime asymmetric FOV for one eye (radians); false when unknown.</summary>
+        public bool TryGetEyeFov(int eye, out System.Numerics.Vector4 fov)
+        {
+            fov = default;
+            if (!TrackingAvailable)
+                return false;
+            try
+            {
+                var rc = NativeMethods.xrGetEyeFov(_session, eye, out var l, out var r, out var u, out var d);
+                if (rc != 0)
+                    return false;
+                fov = new System.Numerics.Vector4(l, r, u, d);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>Best-effort haptic pulse. Never throws.</summary>
+        public void SendHaptic(VRHandedness hand, float amplitude, int durationMs)
+        {
+            if (!TrackingAvailable)
+                return;
+            try { NativeMethods.xrHaptic(_session, hand == VRHandedness.Left ? 0 : 1, amplitude, durationMs); } catch { }
         }
 
         public void Shutdown()
@@ -276,7 +374,7 @@ namespace Orts.VR
             [DllImport("orvr_openxr_shim.dll", EntryPoint = "orvr_xr_init_d3d11", CallingConvention = CallingConvention.Cdecl)]
             internal static extern int xrCreateInstanceForD3D11(
                 [MarshalAs(UnmanagedType.LPStr)] string appName,
-                uint luidLow, int luidHigh,
+                IntPtr d3d11Device,
                 out ulong instance, out ulong systemId,
                 out IntPtr runtimeNameUtf8,
                 out int recommendedWidth, out int recommendedHeight);
@@ -285,7 +383,7 @@ namespace Orts.VR
             internal static extern void xrFreeString(IntPtr s);
 
             [DllImport("orvr_openxr_shim.dll", EntryPoint = "orvr_xr_create_session_d3d11", CallingConvention = CallingConvention.Cdecl)]
-            internal static extern int xrCreateD3D11Session(ulong instance, ulong systemId, uint luidLow, int luidHigh, out ulong session);
+            internal static extern int xrCreateD3D11Session(ulong instance, ulong systemId, IntPtr d3d11Device, out ulong session);
 
             [DllImport("orvr_openxr_shim.dll", EntryPoint = "orvr_xr_create_spaces", CallingConvention = CallingConvention.Cdecl)]
             internal static extern int xrCreateReferenceSpaces(ulong session, out ulong headSpace, out ulong leftSpace, out ulong rightSpace);
@@ -302,8 +400,41 @@ namespace Orts.VR
             [DllImport("orvr_openxr_shim.dll", EntryPoint = "orvr_xr_recenter", CallingConvention = CallingConvention.Cdecl)]
             internal static extern void xrRecenter(ulong session);
 
+            [DllImport("orvr_openxr_shim.dll", EntryPoint = "orvr_xr_actions", CallingConvention = CallingConvention.Cdecl)]
+            internal static extern int xrPollActions(ulong session, out BothHands both);
+
+            [StructLayout(LayoutKind.Sequential)]
+            internal struct HandActionState
+            {
+                public int Active;
+                public System.Numerics.Vector3 AimPosition;
+                public System.Numerics.Quaternion AimOrientation;
+                public float Trigger;
+                public int TriggerPressed;
+                public int TriggerReleased;
+                public int SqueezePressed;
+                public System.Numerics.Vector2 Thumbstick;
+                public int Buttons;
+            }
+
+            [StructLayout(LayoutKind.Sequential)]
+            internal struct BothHands
+            {
+                public HandActionState Left;
+                public HandActionState Right;
+            }
+
             [DllImport("orvr_openxr_shim.dll", EntryPoint = "orvr_xr_end", CallingConvention = CallingConvention.Cdecl)]
             internal static extern int xrEndSession(ulong session);
+
+            [DllImport("orvr_openxr_shim.dll", EntryPoint = "orvr_xr_submit_shared", CallingConvention = CallingConvention.Cdecl)]
+            internal static extern int xrSubmitShared(ulong session, IntPtr sharedLeft, IntPtr sharedRight, int width, int height);
+
+            [DllImport("orvr_openxr_shim.dll", EntryPoint = "orvr_xr_get_fov", CallingConvention = CallingConvention.Cdecl)]
+            internal static extern int xrGetEyeFov(ulong session, int eye, out float fovLeft, out float fovRight, out float fovUp, out float fovDown);
+
+            [DllImport("orvr_openxr_shim.dll", EntryPoint = "orvr_xr_haptic", CallingConvention = CallingConvention.Cdecl)]
+            internal static extern void xrHaptic(ulong session, int hand, float amplitude, int durationMs);
 
             [DllImport("orvr_openxr_shim.dll", EntryPoint = "orvr_xr_destroy", CallingConvention = CallingConvention.Cdecl)]
             internal static extern void xrDestroy(ulong handle);

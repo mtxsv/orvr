@@ -389,11 +389,13 @@ namespace Orts.VR.Tests
                 var host = new VROpenXRHost();
                 // This machine has no orvr_openxr_shim.dll; the host must NOT
                 // throw and must report fallback status.
-                var ok = host.Initialize(0, 0);
+                var ok = host.Initialize(IntPtr.Zero);
                 Assert.False(ok, "init fails safely");
                 Assert.True(host.Status == VROpenXRStatus.RuntimeMissing || host.Status == VROpenXRStatus.Error,
                     "fallback status, got " + host.Status);
                 Assert.False(host.TrackingAvailable, "no tracking claimed");
+                Assert.False(host.PollActions(out var lh, out var rh), "no actions in fallback");
+                Assert.False(lh.Active || rh.Active, "hands inactive in fallback");
                 host.Shutdown();
                 host.Shutdown(); // idempotent
                 Assert.True(host.Status == VROpenXRStatus.ShutDown, "shutdown");
