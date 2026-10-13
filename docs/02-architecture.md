@@ -29,7 +29,11 @@ Math uses `System.Numerics` only. The layout of `Matrix4x4` (M11..M44) matches X
 5. `VRControllerInteraction` — OpenXR action states (`aim pose`, `trigger`, `squeeze`, `thumbstick`, buttons per hand; left/right swappable):
    - One ray per active hand from controller aim pose. 3D-cab: ray vs. control bounds in cab space. 2D-cab/popups: controller ray projected to a **virtual screen cursor** that reuses the existing `ICabViewMouseControlRenderer.IsMouseWithin/DestinationRectangleGet/HandleUserInput` and `WindowManager` hit-testing — the same code path as the mouse, so behavior (press/toggle/hold, detents, limits) is identical.
    - Grab semantics: on trigger press store the grab offset (control value + controller anchor) so there is no jump; while held map controller motion to the control's `[MinValue, MaxValue]` fraction (`GetRangeFraction` convention), snapping to notches where the control defines them; on release commit through the normal command path. External-camera mode never routes rays to cab controls (train-exterior guard).
-6. `VRSettings` — POCO following `UserSettings` conventions (`VREnabled`, `VRRenderScale`, `VRIPD`, `VRPositionalTracking`, `VRHeadRadiusM`, `VRRecenterKey`, handedness, per-button bindings, `VRHaptics`): load/save through the same property mechanism; all defaults keep desktop behavior unchanged.
+6. `VRSettings` — POCO following `UserSettings` conventions. The engine settings
+   store persists bool/int/string only, so floats use integer conventions
+   (`VRRenderScalePercent`, `VRIPDMillimeters`, `VRHeadRadiusMM`, ... — see
+   `Integration/RunActivity/VR/UserSettings.VR.inc.cs`): load/save through the
+   same property mechanism; all defaults keep desktop behavior unchanged.
 
 ## Frame flow (VR active, runtime present)
 
